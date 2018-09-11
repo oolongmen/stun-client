@@ -127,34 +127,36 @@ int openBind(int family, int socktype, int protocol)
     struct addrinfo hints, *res = NULL;
     int optval = 1;
 
-    sock = socket(family, socktype, protocol);
+    bzero(&hints, sizeof(hints));
 
-    if (sock < 0)
+    hints.ai_family = family;
+    hints.ai_socktype = socktype;
+    hints.ai_flags = 0;
+    hints.ai_protocol = protocol;
+
+    if (getaddrinfo(sOpts.IP,
+                    sOpts.Port,
+                    &hints,
+                    &res) < 0)
     {
-        perror("create socket failed");
+        perror("getaddrinfo failed");
         return -1;
     }
 
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
-               &optval, sizeof(optval));
-
     do
     {
-        bzero(&hints, sizeof(hints));
+        sock = socket(res->ai_family,
+                      res->ai_socktype,
+                      res->ai_protocol);
 
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_DGRAM;
-        hints.ai_flags = 0;
-        hints.ai_protocol = 0;
-
-        if (getaddrinfo(sOpts.IP,
-                        sOpts.Port,
-                        &hints,
-                        &res) < 0)
+        if (sock < 0)
         {
-            perror("getaddrinfo failed");
+            perror("create socket failed");
             break;
         }
+
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+                   &optval, sizeof(optval));
 
         if (bind(sock,
                  res->ai_addr,
@@ -170,14 +172,10 @@ int openBind(int family, int socktype, int protocol)
     } while (0);
 
     if (sock >= 0)
-    {
         close(sock);
-    }
 
     if (res)
-    {
         freeaddrinfo(res);
-    }
 
     return -1;
 }

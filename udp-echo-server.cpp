@@ -46,17 +46,19 @@ printHex(const char *data, size_t len)
 }
 #endif
 
-int udpEchoServer()
+int openBind(int family, int socktype, int protocol)
 {
-    struct addrinfo hints, *res;
+    int sock = -1;
+    struct addrinfo hints, *res = NULL;
+    int optval = 1;
 
     bzero(&hints, sizeof(hints));
 
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_family = family;
+    hints.ai_socktype = socktype;
     hints.ai_flags = 0;
-    hints.ai_protocol = 0;
-    
+    hints.ai_protocol = protocol;
+
     if (getaddrinfo(sOpts.IP,
                     sOpts.Port,
                     &hints,
@@ -66,23 +68,50 @@ int udpEchoServer()
         return -1;
     }
 
-    int sock = socket(res->ai_family,
+    do
+    {
+        sock = socket(res->ai_family,
                       res->ai_socktype,
-                      0);
+                      res->ai_protocol);
+
+        if (sock < 0)
+        {
+            perror("create socket failed");
+            break;
+        }
+
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+                   &optval, sizeof(optval));
+
+        if (bind(sock,
+                 res->ai_addr,
+                 res->ai_addrlen) < 0)
+        {
+            perror("bind");
+            break;
+        }
+
+        freeaddrinfo(res);
+        return sock;
+
+    } while (0);
+
+    if (sock >= 0)
+        close(sock);
+
+    if (res)
+        freeaddrinfo(res);
+
+    return -1;
+}
+
+int udpEchoServer()
+{
+    int sock = openBind(AF_UNSPEC, SOCK_DGRAM, 0);
 
     if (sock < 0)
     {
         perror("socket failed");
-        return -1;
-    }
-
-    int optval = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-
-    if (bind(sock, res->ai_addr, res->ai_addrlen) < 0)
-    {
-        perror("bind failed");
-        close(sock);
         return -1;
     }
 
@@ -123,7 +152,6 @@ int udpEchoServer()
         }
     }
 
-    freeaddrinfo(res);
     return 0;
 }
 
@@ -155,7 +183,7 @@ int main(int argc, char *argv[])
                              "hi:p:",
                              long_options,
                              NULL)) != -1)
-    { 
+    {
         switch(opt)
         {
             case 'h':
