@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <stdlib.h>
+#include <getopt.h>
 
 #include "stun.h"
 
@@ -29,7 +30,7 @@
 static struct 
 {
     const char *IP = "0.0.0.0";
-    const char *Port = "59876";
+    const char *Port = "51024";
     const char *ServerIP = "stun.ekiga.net";
     const char *ServerPort = "3478";
     int rto = 500;
@@ -623,7 +624,7 @@ int openSocket(int family, int socktype, int protocol, int port = 0)
     return -1;
 }
 
-int main()
+int getNATType()
 {
     struct addrinfo hints;
     struct addrinfo *srvInfos;
@@ -662,6 +663,7 @@ int main()
 
         do
         {
+            // TEST1
             if (doTest1(sock,
                         srv->ai_addr,
                         srv->ai_addrlen,
@@ -671,10 +673,12 @@ int main()
                 break;
             }
 
+            // TEST2
             if (doTest2(sock,
                         srv->ai_addr,
                         srv->ai_addrlen,
-                        true, true,
+                        true,
+                        true,
                         res2) == 0)
             {
                 DLOG("full cone");
@@ -690,6 +694,7 @@ int main()
             alt_srv.sin_addr.s_addr = inet_addr(res1.changed_ip);
             alt_srv.sin_port = htons(res1.changed_port);
 
+            // TEST1 to alternate server ip
             if (doTest1(sock,
                         (struct sockaddr *) &alt_srv,
                         sizeof(struct sockaddr_in),
@@ -710,10 +715,12 @@ int main()
                 break;
             }
 
+            // TEST3
             if (doTest2(sock,
-                        (struct sockaddr *) &alt_srv,
-                        sizeof(struct sockaddr_in),
-                        false, true,
+                        srv->ai_addr,
+                        srv->ai_addrlen,
+                        false,
+                        true,
                         res2) < 0)
             {
                 DLOG("port restricted cone");
@@ -738,7 +745,7 @@ int main()
 
     if (rc < 0)
     {
-        printf("test failed");
+        printf("test failed\n");
     }
     else
     {
@@ -759,3 +766,73 @@ int main()
     return 0;
 }
 
+static void ShowHelp()
+{
+    printf(APP_NAME " " APP_VERSION "\n");
+    printf("\n");
+    printf("Usage: " APP_NAME " [Options]\n");
+    printf("\n");
+    printf("Options:\n");
+    printf(" -h                       print this help\n");
+    printf(" -i, --ip [str]           local ip\n");
+    printf(" -p, --port [num]         local port\n");
+    printf(" -s, --sname [str]        stun server name or ip\n");
+    printf(" -o, --sport [num]        stun server port\n");
+}
+
+int main(int argc, char *argv[])
+{
+    int opt;
+
+    static const struct option long_options[] =
+    {
+        { "ip", required_argument, 0, 'i' },
+        { "port", required_argument, 0, 'p' },
+        { "sname", required_argument, 0, 's' },
+        { "sport", required_argument, 0, 'o' },
+        { 0, 0, 0, 0 }
+    };
+
+    while((opt = getopt_long(argc,
+                             argv,
+                             "hi:p:s:o:",
+                             long_options,
+                             NULL)) != -1)
+    { 
+        switch(opt)
+        {
+            case 'h':
+            {
+                ShowHelp();
+                return 0;
+            }
+            case 'i':
+            {
+                sOpts.IP = optarg;
+                break;
+            }
+            case 'p':
+            {
+                sOpts.Port = optarg;
+                break;
+            }
+            case 's':
+            {
+                sOpts.ServerIP = optarg;
+                break;
+            }
+            case 'o':
+            {
+                sOpts.ServerPort = optarg;
+                break;
+            }
+            default:
+            {
+                ShowHelp();
+                return 0;
+            }
+        }
+    }
+
+    return getNATType();
+}
