@@ -41,8 +41,8 @@ struct MyResult
 {
     char ip[128];
     int port;
-    char changed_ip[128];
-    int changed_port;
+    char changedIp[128];
+    int changedPort;
 };
 
 using namespace Stun;
@@ -99,16 +99,16 @@ initMsg(MsgHeader *req)
 inline int
 msgType2Class(int msg)
 {
-	return \
-	    ((msg & 0x0010) >> 4) | ((msg & 0x0100) >> 7);
+    return \
+        ((msg & 0x0010) >> 4) | ((msg & 0x0100) >> 7);
 }
 
 inline int
 msgType2Method(int msg)
 {
-	return \
-	    (msg & 0x000f) | ((msg & 0x00e0) >> 1) |
-	    ((msg & 0x3e00) >> 2);
+    return \
+        (msg & 0x000f) | ((msg & 0x00e0) >> 1) |
+        ((msg & 0x3e00) >> 2);
 }
 
 inline int
@@ -132,7 +132,7 @@ printHex(const char *data, size_t len)
 #endif
 
 inline int
-appendStrAttribute(
+setStrAttribute(
     MsgAttribute *attr,
     MsgAttributeType type,
     size_t maxlen,
@@ -158,7 +158,7 @@ appendStrAttribute(
 }
 
 inline int
-appendChangeReqAttribute(MsgAttribute *attr, bool changeIP, bool changePort)
+setChangeReqAttribute(MsgAttribute *attr, bool changeIP, bool changePort)
 {
     uint8_t data[4];
 
@@ -287,7 +287,7 @@ void processResponse(const char *data,
 
         uint16_t type = ntohs(attr->type);
         uint16_t len = ntohs(attr->length);
-        
+
         DLOG("type: %04x, len: %d", type, len);
 
         switch (type)
@@ -313,8 +313,8 @@ void processResponse(const char *data,
             case STUN_CHANGED_ADDRESS:
                 DLOG("CHANGED_ADDRESS");
                 parseAddress((char*) attr->value, ip, 128, port);
-                strcpy(res.changed_ip, ip);
-                res.changed_port = port;
+                strcpy(res.changedIp, ip);
+                res.changedPort = port;
                 break;
             case STUN_USERNAME:
                 DLOG("USERNAME");
@@ -412,7 +412,7 @@ ssize_t sendReceive(int sock,
             timeout *= 2;
             continue;
         }
-        
+
         bzero(resp, resplen);
 
         rc = recvfrom(sock,
@@ -436,10 +436,12 @@ ssize_t sendReceive(int sock,
 }
 
 int 
-doTest1(int sock,
-        struct sockaddr *to,
-        socklen_t tolen,
-        MyResult &res)
+doTest(int sock,
+       struct sockaddr *to,
+       socklen_t tolen,
+       bool changeIp,
+       bool changePort,
+       MyResult &res)
 {
     char data[1024];
     const char *tail;
@@ -456,7 +458,7 @@ doTest1(int sock,
 
     initMsg(req);
 
-    rc = appendStrAttribute(
+    rc = setStrAttribute(
             (MsgAttribute*) tail,
             STUN_SOFTWARE,
             remain,
@@ -471,85 +473,20 @@ doTest1(int sock,
     tail += rc;
     remain -= rc;
 
-    req->length = htons(tail - data - sizeof(MsgHeader));
-    req->type = htons(formMsgType(STUN_REQUEST, STUN_BINDING));
-    
-    DLOG("size: %ld", tail - data - sizeof(MsgHeader));
-    DLOG("type; 0x%08x", req->type);
-
-#ifndef NDEBUG
-    // printHex(data, tail - data);
-#endif
-
-    char resp[1024];
-
-    rc = sendReceive(
-            sock,
-            to, tolen,
-            data, tail - data,
-            resp, 1024);
-    
-    if (rc <= 0)
+    if (changeIp || changePort)
     {
-        DLOG("send failed");
-        return -1;
+        rc = setChangeReqAttribute(
+                (MsgAttribute*) tail,
+                changeIp,
+                changePort);
+
+        tail += rc;
+        remain -= rc;
     }
-
-    processResponse(resp, rc, res);
-
-    return 0;
-}
-
-int 
-doTest2(int sock,
-        struct sockaddr *to,
-        socklen_t tolen,
-        bool changeIp,
-        bool changePort,
-        MyResult &res)
-{
-    char data[1024];
-    const char *tail;
-    size_t remain = 0;
-
-    MsgHeader *req;
-
-    ssize_t rc = 0;
-
-    req = (MsgHeader*) data;
-
-    tail = (char*) req->data;
-    remain = sizeof(data) - sizeof(MsgHeader);
-
-
-    initMsg(req);
-
-    rc = appendStrAttribute(
-            (MsgAttribute*) tail,
-            STUN_SOFTWARE,
-            remain,
-            APP_NAME " " APP_VERSION,
-            strlen(APP_NAME " " APP_VERSION));
-
-    if (rc < 0)
-    {
-        return -1;
-    }
-
-    tail += rc;
-    remain -= rc;
-
-    rc = appendChangeReqAttribute(
-            (MsgAttribute*) tail,
-            changeIp,
-            changePort);
-
-    tail += rc;
-    remain -= rc;
 
     req->length = htons(tail - data - sizeof(MsgHeader));
     req->type = htons(formMsgType(STUN_REQUEST, STUN_BINDING));
-    
+
     DLOG("size: %ld", tail - data - sizeof(MsgHeader));
     DLOG("type: 0x%08x", req->type);
 
@@ -564,7 +501,7 @@ doTest2(int sock,
             to, tolen,
             data, tail - data,
             resp, 1024);
-    
+
     if (rc <= 0)
     {
         DLOG("send failed");
@@ -575,51 +512,61 @@ doTest2(int sock,
     return 0;
 }
 
-int openSocket(int family, int socktype, int protocol, int port = 0)
+int openBind(int family, int socktype, int protocol)
 {
-    int sock = 0;
-    struct sockaddr_in addr;
+    int sock = -1;
+    struct addrinfo hints, *res = NULL;
+    int optval = 1;
 
-    DLOG("%d:%d", family, socktype);
+    bzero(&hints, sizeof(hints));
 
-    sock = socket(family, socktype, protocol);
+    hints.ai_family = family;
+    hints.ai_socktype = socktype;
+    hints.ai_flags = 0;
+    hints.ai_protocol = protocol;
 
-    if (sock < 0)
+    if (getaddrinfo(sOpts.IP,
+                    sOpts.Port,
+                    &hints,
+                    &res) < 0)
     {
-        perror("create socket failed");
+        perror("getaddrinfo failed");
         return -1;
     }
 
-    int optval = 1;
-
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-
     do
     {
-        bzero(&addr, sizeof(addr));
+        sock = socket(res->ai_family,
+                      res->ai_socktype,
+                      res->ai_protocol);
 
-        if (inet_pton(AF_INET, sOpts.IP, &addr) < 0)
+        if (sock < 0)
         {
-            perror("inet_pton failed");
+            perror("create socket failed");
             break;
         }
-        
-        addr.sin_port = htons(port);
 
-        if (bind(sock, (struct sockaddr *) &addr, sizeof(addr)) < 0)
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+                   &optval, sizeof(optval));
+
+        if (bind(sock,
+                 res->ai_addr,
+                 res->ai_addrlen) < 0)
         {
             perror("bind");
             break;
         }
 
+        freeaddrinfo(res);
         return sock;
 
     } while (0);
 
-    if (sock)
-    {
+    if (sock >= 0)
         close(sock);
-    }
+
+    if (res)
+        freeaddrinfo(res);
 
     return -1;
 }
@@ -627,7 +574,7 @@ int openSocket(int family, int socktype, int protocol, int port = 0)
 int getNATType()
 {
     struct addrinfo hints;
-    struct addrinfo *srvInfos;
+    struct addrinfo *srvAddr = 0, *altAddr = 0;
 
     bzero(&hints, sizeof(hints));
 
@@ -639,7 +586,7 @@ int getNATType()
     if (getaddrinfo(sOpts.ServerIP,
                     sOpts.ServerPort,
                     &hints,
-                    &srvInfos) < 0)
+                    &srvAddr) < 0)
     {
         perror("getaddrinfo failed");
         return -1;
@@ -648,12 +595,11 @@ int getNATType()
     MyResult res1, res2;
     int rc = -1;
 
-    for (auto srv = srvInfos; srv; srv = srv->ai_next)
+    for (auto srv = srvAddr; srv; srv = srv->ai_next)
     {
-        int sock = openSocket(srv->ai_family,
-                              srv->ai_socktype,
-                              0,
-                              atoi(sOpts.Port));
+        int sock = openBind(srv->ai_family,
+                            srv->ai_socktype,
+                            0);
 
         if (sock < 0)
         {
@@ -664,43 +610,53 @@ int getNATType()
         do
         {
             // TEST1
-            if (doTest1(sock,
-                        srv->ai_addr,
-                        srv->ai_addrlen,
-                        res1) < 0)
+            if (doTest(sock,
+                       srv->ai_addr,
+                       srv->ai_addrlen,
+                       false,
+                       false,
+                       res1) < 0)
             {
                 DLOG("UDP blocked");
                 break;
             }
 
             // TEST2
-            if (doTest2(sock,
-                        srv->ai_addr,
-                        srv->ai_addrlen,
-                        true,
-                        true,
-                        res2) == 0)
+            if (doTest(sock,
+                       srv->ai_addr,
+                       srv->ai_addrlen,
+                       true,
+                       true,
+                       res2) == 0)
             {
                 DLOG("full cone");
                 rc = 0; //Full Cone
                 break;
             }
 
-            DLOG("%s:%d", res1.changed_ip, res1.changed_port);
+            DLOG("%s:%d", res1.changedIp, res1.changedPort);
 
-            struct sockaddr_in alt_srv;
+            char tmp[32];
+            sprintf(tmp, "%d", res1.changedPort);
 
-            alt_srv.sin_family = AF_INET;
-            alt_srv.sin_addr.s_addr = inet_addr(res1.changed_ip);
-            alt_srv.sin_port = htons(res1.changed_port);
-
-            // TEST1 to alternate server ip
-            if (doTest1(sock,
-                        (struct sockaddr *) &alt_srv,
-                        sizeof(struct sockaddr_in),
-                        res2) < 0)
+            if (getaddrinfo(res1.changedIp,
+                            tmp,
+                            &hints,
+                            &altAddr) < 0)
             {
-                DLOG("doTest1 failed");
+                DLOG("getaddrinfo failed");
+                break;
+            }
+
+            // TEST1 with alternate server ip
+            if (doTest(sock,
+                       altAddr->ai_addr,
+                       altAddr->ai_addrlen,
+                       false,
+                       false,
+                       res2) < 0)
+            {
+                DLOG("TEST1 alt addr failed");
                 break;
             }
 
@@ -716,12 +672,12 @@ int getNATType()
             }
 
             // TEST3
-            if (doTest2(sock,
-                        srv->ai_addr,
-                        srv->ai_addrlen,
-                        false,
-                        true,
-                        res2) < 0)
+            if (doTest(sock,
+                       srv->ai_addr,
+                       srv->ai_addrlen,
+                       false,
+                       true,
+                       res2) < 0)
             {
                 DLOG("port restricted cone");
                 rc = 2;
@@ -762,7 +718,9 @@ int getNATType()
         printf("Port: %d\n", res1.port);
     }
 
-    freeaddrinfo(srvInfos);
+    if (srvAddr) freeaddrinfo(srvAddr);
+    if (altAddr) freeaddrinfo(altAddr);
+
     return 0;
 }
 
