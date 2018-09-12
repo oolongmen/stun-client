@@ -221,7 +221,7 @@ printMethodType(uint16_t msgType)
 inline void
 parseAddress(const char *data,
              char *tmp, size_t len,
-             int &port)
+             int &port, bool bXOR = false)
 {
     struct Address {
         uint8_t unused;
@@ -236,8 +236,32 @@ parseAddress(const char *data,
     {
         case 0x01:
             DLOG("ipv4");
-            inet_ntop(AF_INET, p->address, tmp, len);
-            port = ntohs(p->port);
+
+            if (bXOR)
+            {
+                uint8_t ip[4];
+                uint32_t cookie = htonl(MagicCookie);
+
+                for (size_t i=0; i<4; ++i)
+                {
+                    ip[i] = \
+                        p->address[i] ^ ((uint8_t*) &cookie)[i];
+                }
+
+                inet_ntop(AF_INET, ip, tmp, len);
+
+                port = p->port;
+
+                ((uint8_t*) &port)[0] ^= ((uint8_t*) &cookie)[0];
+                ((uint8_t*) &port)[1] ^= ((uint8_t*) &cookie)[1];
+
+                port = ntohs(port);
+            }
+            else
+            {
+                inet_ntop(AF_INET, p->address, tmp, len);
+                port = ntohs(p->port);
+            }
             DLOG("%s:%d", tmp, port);
             break;
         case 0x02:
@@ -342,6 +366,9 @@ void processResponse(const char *data,
                 break;
             case STUN_XOR_MAPPED_ADDRESS:
                 DLOG("XOR_MAPPED_ADDRESS");
+                parseAddress((char*) attr->value, ip, 128, port, true);
+                strcpy(res.ip, ip);
+                res.port = port;
                 break;
             case STUN_SOFTWARE:
                 DLOG("SOFTWARE");
@@ -525,12 +552,18 @@ int openBind(int family, int socktype, int protocol)
     hints.ai_flags = 0;
     hints.ai_protocol = protocol;
 
-    if (getaddrinfo(sOpts.IP,
-                    sOpts.Port,
-                    &hints,
-                    &res) < 0)
+    int rc = 0;
+
+    DLOG("%d:%d:%d", family, socktype, protocol);
+
+    rc = getaddrinfo(sOpts.IP,
+                     sOpts.Port,
+                     &hints,
+                     &res);
+    
+    if (rc != 0)
     {
-        perror("getaddrinfo failed");
+        DLOG("getaddrinfo: %s", gai_strerror(rc));
         return -1;
     }
 
@@ -583,19 +616,23 @@ int getNATType()
     hints.ai_flags = 0;
     hints.ai_protocol = 0;
 
-    if (getaddrinfo(sOpts.ServerIP,
-                    sOpts.ServerPort,
-                    &hints,
-                    &srvAddr) < 0)
+    int rc = 0;
+
+    rc = getaddrinfo(sOpts.ServerIP,
+                     sOpts.ServerPort,
+                     &hints,
+                     &srvAddr);
+    
+    if (rc != 0)
     {
-        perror("getaddrinfo failed");
+        DLOG("getaddrinfo: %s", gai_strerror(rc));
         return -1;
     }
 
     MyResult res1, res2;
-    int rc = -1;
 
-    for (auto srv = srvAddr; srv; srv = srv->ai_next)
+    rc = -1;
+    for (auto srv = srvAddr; srv != NULL; srv = srv->ai_next)
     {
         int sock = openBind(srv->ai_family,
                             srv->ai_socktype,
@@ -606,6 +643,9 @@ int getNATType()
             DLOG("open socket failed");
             break;
         }
+
+        bzero(&res1, sizeof(res1));
+        bzero(&res2, sizeof(res2));
 
         do
         {
@@ -618,6 +658,13 @@ int getNATType()
                        res1) < 0)
             {
                 DLOG("UDP blocked");
+                break;
+            }
+
+            if ((!res1.ip[0] || !res1.port) ||
+                (!res1.changedIp[0] || !res1.changedPort))
+            {
+                DLOG("missing ip or changed ip");
                 break;
             }
 
@@ -699,24 +746,18 @@ int getNATType()
         }
     }
 
-    if (rc < 0)
-    {
-        printf("test failed\n");
-    }
-    else
-    {
-        const char *NAT[] = {
-            "Full Cone",
-            "Restricted Cone",
-            "Port Restricted Cone",
-            "Symmetric"
-        };
+    const char *NAT[] = {
+        "Unknown",
+        "Full Cone",
+        "Restricted Cone",
+        "Port Restricted Cone",
+        "Symmetric"
+    };
 
-        printf("==========================\n");
-        printf("NAT Type: %s\n", NAT[rc]);
-        printf("IP: %s\n", res1.ip);
-        printf("Port: %d\n", res1.port);
-    }
+    printf("==========================\n");
+    printf("NAT Type: %s\n", NAT[rc + 1]);
+    printf("IP: %s\n", res1.ip);
+    printf("Port: %d\n", res1.port);
 
     if (srvAddr) freeaddrinfo(srvAddr);
     if (altAddr) freeaddrinfo(altAddr);

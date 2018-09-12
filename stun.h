@@ -70,8 +70,7 @@ namespace Stun
         // STUN_OTHER_ADDRESS         = 0x802c
     };
 
-    static const uint64_t MagicCookie = 0x2112A442;
-
+    static const uint32_t MagicCookie = 0x2112A442;
 }
 
 #endif
